@@ -13,6 +13,7 @@ import os
 import shutil
 import torch
 import itertools
+import imageio
 import torch.nn as nn
 import torch.nn.parallel
 import torch.optim as optim
@@ -34,6 +35,7 @@ from diffrend.torch.renderer import (render, render_splats_along_ray,
                                      z_to_pcl_CC)
 from diffrend.utils.sample_generator import uniform_sample_sphere
 from diffrend.utils.utils import contrast_stretch_percentile, save_xyz
+from diffrend.numpy.ops import sph2cart_vec
 from tensorboardX import SummaryWriter
 
 import matplotlib
@@ -51,6 +53,8 @@ matplotlib.use('Agg')
 def copy_scripts_to_folder(expr_dir):
     """Copy scripts."""
     shutil.copy("twin_networks.py", expr_dir)
+    shutil.copytree("generator_networks", os.path.join(expr_dir, "generator_networks"))
+    shutil.copytree("discriminator_networks", os.path.join(expr_dir, "discriminator_networks"))
     shutil.copy("../params.py", expr_dir)
     shutil.copy("../renderer.py", expr_dir)
     shutil.copy("datasets.py", expr_dir)
@@ -122,101 +126,6 @@ def calc_gradient_penalty(discriminator, encoder, real_data, fake_data, fake_dat
 
     return gradient_penalty
 
-
-def calc_gradient_penalty2(discriminator, encoder, real_data, fake_data, fake_data_cond, z, z_enc,
-                          gp_lambda):
-    """Calculate GP."""
-    assert real_data.size(0) == fake_data.size(0)
-    alpha = torch.rand(real_data.size(0), 1, 1, 1)
-    alpha = alpha.expand(real_data.size())
-    alpha = alpha.cuda()
-
-    interpolates = Variable(alpha * real_data + ((1 - alpha) * fake_data),
-                            requires_grad=True)
-
-    interpolate_mu_z, interpolate_logvar_z = encoder(interpolates)
-
-    interpolate_z = gauss_reparametrize(interpolate_mu_z, interpolate_logvar_z)
-
-    interpolate_z2 = Variable(interpolate_z.data, requires_grad=True)
-    interpolates_cond = Variable(fake_data_cond, requires_grad=True)
-    disc_interpolates = discriminator(interpolates, interpolates_cond, interpolate_z2)
-    gradients = torch.autograd.grad(
-        outputs=disc_interpolates, inputs=interpolates,
-        grad_outputs=torch.ones(disc_interpolates.size()).cuda(),
-        create_graph=True, retain_graph=True, only_inputs=True)[0]
-
-    gradients_z = torch.autograd.grad(
-        outputs=disc_interpolates, inputs=interpolate_z2,
-        grad_outputs=torch.ones(disc_interpolates.size()).cuda(),
-        create_graph=True, retain_graph=True, only_inputs=True)[0]
-    gradients = gradients.contiguous().view(gradients.size(0), -1)
-    gradients_z = gradients_z.contiguous().view(gradients_z.size(0), -1)
-    gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * gp_lambda + ((gradients_z.norm(2, dim=1) - 1) ** 2).mean() * gp_lambda
-
-    return gradient_penalty
-
-
-def calc_gradient_penalty3(discriminator, encoder, real_data, fake_data, fake_data_cond, z, z_enc,
-                          gp_lambda):
-    """Calculate GP."""
-    assert real_data.size(0) == fake_data.size(0)
-    alpha = torch.rand(real_data.size(0), 1, 1, 1)
-    alpha = alpha.expand(real_data.size())
-    alpha = alpha.cuda()
-
-    alpha_z = torch.rand(z.size(0), 1, 1, 1)
-    alpha_z = alpha_z.expand(z.size())
-    alpha_z = alpha_z.cuda()
-
-    interpolates = Variable(alpha * real_data + ((1 - alpha) * fake_data),
-                            requires_grad=True)
-    interpolate_z = Variable(alpha_z * z_enc + ((1 - alpha_z) * z),
-                            requires_grad=True)
-    interpolates_cond = Variable(fake_data_cond, requires_grad=True)
-    disc_interpolates = discriminator(interpolates, interpolates_cond, interpolate_z)
-    gradients = torch.autograd.grad(
-        outputs=disc_interpolates, inputs=interpolates,
-        grad_outputs=torch.ones(disc_interpolates.size()).cuda(),
-        create_graph=True, retain_graph=True, only_inputs=True)[0]
-    gradients = gradients.contiguous().view(gradients.size(0), -1)
-    gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * gp_lambda
-
-    return gradient_penalty
-
-def calc_gradient_penalty4(discriminator, encoder, real_data, fake_data, fake_data_cond, z, z_enc,
-                          gp_lambda):
-    """Calculate GP."""
-    assert real_data.size(0) == fake_data.size(0)
-    alpha = torch.rand(real_data.size(0), 1, 1, 1)
-    alpha = alpha.expand(real_data.size())
-    alpha = alpha.cuda()
-
-    alpha_z = torch.rand(z.size(0), 1, 1, 1)
-    alpha_z = alpha_z.expand(z.size())
-    alpha_z = alpha_z.cuda()
-
-    interpolates = Variable(alpha * real_data + ((1 - alpha) * fake_data),
-                            requires_grad=True)
-    interpolate_z = Variable(alpha_z * z_enc + ((1 - alpha_z) * z),
-                            requires_grad=True)
-    interpolates_cond = Variable(fake_data_cond, requires_grad=True)
-    disc_interpolates = discriminator(interpolates, interpolates_cond, interpolate_z)
-    gradients = torch.autograd.grad(
-        outputs=disc_interpolates, inputs=interpolates,
-        grad_outputs=torch.ones(disc_interpolates.size()).cuda(),
-        create_graph=True, retain_graph=True, only_inputs=True)[0]
-
-    gradients_z = torch.autograd.grad(
-        outputs=disc_interpolates, inputs=interpolate_z,
-        grad_outputs=torch.ones(disc_interpolates.size()).cuda(),
-        create_graph=True, retain_graph=True, only_inputs=True)[0]
-    gradients = gradients.contiguous().view(gradients.size(0), -1)
-    gradients_z = gradients_z.contiguous().view(gradients_z.size(0), -1)
-    gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean() * gp_lambda + ((gradients_z.norm(2, dim=1) - 1) ** 2).mean() * gp_lambda
-
-    return gradient_penalty
-
 class GAN(object):
     """GAN class."""
 
@@ -284,8 +193,8 @@ class GAN(object):
 
     def create_networks(self, ):
         """Create networks."""
-        self.netG, _, self.netD, self.netD2, self.netE = create_networks(
-            self.opt, verbose=True, depth_only=True)  # TODO: Remove D2 and G2
+        self.netG, self.netD, self.netE = create_networks(
+            self.opt, verbose=True, depth_only=True)
         # Create the normal estimation network which takes pointclouds in the
         # camera space and outputs the normals
 
@@ -520,7 +429,13 @@ class GAN(object):
             data.append(im)
             data_depth.append(im_d)
             data_normal.append(im_n)
-            data_cond.append(large_scene['camera']['eye'])
+            if self.opt.no_renderer:
+                # If we aren't using a renderer, it is more fair to condition the network on the light position
+                # since the renderer had access to that value explicitly
+                data_cond_item = torch.cat((large_scene['camera']['eye'], large_scene['lights']['pos'][0,:3]), 0)
+            else:
+                data_cond_item = large_scene['camera']['eye']
+            data_cond.append(data_cond_item)
         # Stack real samples
         real_samples = torch.stack(data)
         real_samples_depth = torch.stack(data_depth)
@@ -694,7 +609,10 @@ class GAN(object):
                 else:
                     self.scene['camera']['eye'] = batch_cond[0]
 
-            self.scene['lights']['pos'][0,:3]=tch_var_f(self.light_pos1[idx])
+            if batch_cond is None:
+                self.scene['lights']['pos'][0,:3]=tch_var_f(self.light_pos1[idx])
+            else:
+                self.scene['lights']['pos'][0,:3]=tch_var_f(self.light_pos1[0])
             #self.scene['lights']['pos'][1,:3]=tch_var_f(self.light_pos2[idx])
 
             # Render scene
@@ -889,7 +807,7 @@ class GAN(object):
         self.writer.add_histogram("z_gradient_hist_channel", grad[0].clone().cpu().data.numpy(),self.iteration_no)
 
         self.writer.add_image("z_gradient_im",
-                               grad[0].view(self.opt.splats_img_size,self.opt.splats_img_size),
+                               grad[0].view(-1, self.opt.splats_img_size,self.opt.splats_img_size),
                                self.iteration_no)
 
     def train(self, ):
@@ -900,15 +818,10 @@ class GAN(object):
             print(' > Generator', self.opt.gen_model_path)
             self.netG.load_state_dict(
                 torch.load(open(self.opt.gen_model_path, 'rb')))
-            print(' > Generator2', self.opt.gen_model_path2)
-            self.netG2.load_state_dict(
-                torch.load(open(self.opt.gen_model_path2, 'rb')))
             print(' > Discriminator', self.opt.dis_model_path)
             self.netD.load_state_dict(
                 torch.load(open(self.opt.dis_model_path, 'rb')))
-            print(' > Discriminator2', self.opt.dis_model_path2)
-            self.netD2.load_state_dict(
-                torch.load(open(self.opt.dis_model_path2, 'rb')))
+            # TODO: Encoder Network?
 
         # Start training
         file_name = os.path.join(self.opt.out_dir, 'L2.txt')
@@ -946,8 +859,15 @@ class GAN(object):
                     fake_z = self.netG(self.noisev, self.inputv_cond)
                     # The normal generator is dependent on z
 
-                    fake_rendered, fd, loss = self.render_batch(
-                        fake_z, self.inputv_cond)
+                    if self.opt.no_renderer:
+                        # In this case, the output is the image, not depth
+                        # This image is flattened, we need to restructure it to 2D
+                        temp = fake_z.permute(0, 2, 1)
+                        fake_rendered = temp.view(temp.shape[0], temp.shape[1], int(np.sqrt(temp.shape[2])), -1)
+                    else:
+                        fake_rendered, fd, loss = self.render_batch(
+                            fake_z, self.inputv_cond)
+
                     # Do not bp through gen
                     outD_fake = self.netD(fake_rendered.detach(),
                                           self.inputv_cond.detach(),self.noisev.detach())
@@ -992,11 +912,19 @@ class GAN(object):
                 self.in_critic=0
                 self.generate_noise_vector()
                 fake_z = self.netG(self.noisev, self.inputv_cond)
-                if iteration % self.opt.print_interval*4 == 0:
+                if not self.opt.no_renderer and iteration % self.opt.print_interval*4 == 0:
                     fake_z.register_hook(self.tensorboard_hook)
 
-                fake_rendered, fd, loss = self.render_batch(
-                    fake_z, self.inputv_cond)
+                if self.opt.no_renderer:
+                    # In this case, the output is the image, not depth
+                    # This image is flattened, we need to restructure it to 2D
+                    temp = fake_z.permute(0, 2, 1)
+                    fake_rendered = temp.view(temp.shape[0], temp.shape[1], int(np.sqrt(temp.shape[2])), -1)
+                    loss = 0
+                else:
+                    fake_rendered, fd, loss = self.render_batch(
+                        fake_z, self.inputv_cond)
+
                 outG_fake = self.netD(fake_rendered, self.inputv_cond, self.noisev)
 
                 if self.opt.criterion == 'GAN':
@@ -1027,8 +955,14 @@ class GAN(object):
                     raise ValueError('Unknown GAN criterium')
                 reconstruction_z = self.netG(z_real, self.inputv_cond)
 
-                reconstruction_rendered, reconstructiond, loss = self.render_batch(
-                    reconstruction_z, self.inputv_cond)
+                if self.opt.no_renderer:
+                    # In this case, the output is the image, not depth
+                    # This image is flattened, we need to restructure it to 2D
+                    temp = reconstruction_z.permute(0, 2, 1)
+                    reconstruction_rendered = temp.view(temp.shape[0], temp.shape[1], int(np.sqrt(temp.shape[2])), -1)
+                else:
+                    reconstruction_rendered, reconstructiond, loss = self.render_batch(
+                        reconstruction_z, self.inputv_cond)
 
                 mse_criterion = nn.MSELoss().cuda()
                 reconstruction_loss = mse_criterion(reconstruction_rendered, self.inputv)
@@ -1054,7 +988,7 @@ class GAN(object):
 
 
                 # Log print
-                if iteration % self.opt.print_interval == 0:
+                if not self.opt.no_renderer and iteration % self.opt.print_interval == 0:
 
                     l2_loss = mse_criterion(fd, self.inputv_depth)
                     Wassertein_D = (errD_real.data[0] - errD_fake.data[0])
@@ -1091,10 +1025,12 @@ class GAN(object):
                     l2_file.flush()
                     print("written to file", str(l2_loss.data[0]))
 
+                # Save output videos
+                if iteration % self.opt.save_video_interval == 0:
+                    self.save_video(self.noisev[0], iteration)
+
                 # Save output images
                 if iteration % (self.opt.save_image_interval) == 0 and iteration % (2*self.opt.save_image_interval) !=0:
-                    cs = tch_var_f(contrast_stretch_percentile(
-                        get_data(fd), 200, [fd.data.min(), fd.data.max()]))
                     torchvision.utils.save_image(
                         fake_rendered.data,
                         os.path.join(self.opt.vis_images,
@@ -1114,11 +1050,15 @@ class GAN(object):
                     fake_z = self.netG(self.noisev, cam_pos)
                     # The normal generator is dependent on z
 
-                    fake_rendered, fd, loss = self.render_batch(
-                        fake_z, cam_pos)
+                    if self.opt.no_renderer:
+                        # In this case, the output is the image, not depth
+                        # This image is flattened, we need to restructure it to 2D
+                        temp = fake_z.permute(0, 2, 1)
+                        fake_rendered = temp.view(temp.shape[0], temp.shape[1], int(np.sqrt(temp.shape[2])), -1)
+                    else:
+                        fake_rendered, fd, loss = self.render_batch(
+                            fake_z, cam_pos)
 
-                    cs = tch_var_f(contrast_stretch_percentile(
-                        get_data(fd), 200, [fd.data.min(), fd.data.max()]))
                     torchvision.utils.save_image(
                         fake_rendered.data,
                         os.path.join(self.opt.vis_images,
@@ -1127,8 +1067,6 @@ class GAN(object):
 
                 # Save input images
                 if iteration % (self.opt.save_image_interval) == 0:
-                    cs = tch_var_f(contrast_stretch_percentile(
-                        get_data(fd), 200, [fd.data.min(), fd.data.max()]))
                     torchvision.utils.save_image(
                         self.inputv.data, os.path.join(
                             self.opt.vis_images, 'input_%d.png' % (iteration)),
@@ -1138,6 +1076,34 @@ class GAN(object):
                 if iteration % self.opt.save_interval == 0:
                     self.save_networks(iteration)
 
+    def save_video(self, single_z_real, iteration):
+        """Generate and save a video (gif) of a camera moving in one of the generated scene"""
+
+        theta = np.linspace(np.deg2rad(20), np.deg2rad(80), 80)
+        phi = np.ones_like(theta) * np.deg2rad(40)
+        cam_dist_vec = np.ones_like(theta) * self.opt.cam_dist#*0.8
+        cam_pos_1 = sph2cart_vec(np.stack((cam_dist_vec, phi, theta), axis=1))
+        phi_2 = np.linspace(np.deg2rad(40), np.deg2rad(70), 40)
+        theta_2 = np.ones_like(phi_2) * np.deg2rad(80)
+        cam_dist_vec_2 = np.ones_like(phi_2) * self.opt.cam_dist#*0.8
+        cam_pos_2 = sph2cart_vec(np.stack((cam_dist_vec_2, phi_2, theta_2), axis=1))
+        cam_pos = np.concatenate((cam_pos_1,cam_pos_2))
+
+        if self.opt.no_renderer:
+            cond = torch.cat((tch_var_f(cam_pos), self.inputv_cond[0].repeat(120, 1)[:, 3:]), 1)
+            fake_z = self.netG(single_z_real.repeat(120,1,1,1), cond)
+            temp = fake_z.permute(0, 2, 1)
+            fake_rendered = temp.view(temp.shape[0], temp.shape[1], int(np.sqrt(temp.shape[2])), -1)
+        else:
+            cond = tch_var_f(cam_pos)
+            fake_z = self.netG(single_z_real.repeat(120,1,1,1), cond)
+            fake_rendered = self.render_batch(fake_z, cond)[0]
+
+        out_path = os.path.join(self.opt.vis_videos, 'output_' + str(iteration))
+        imageio.mimwrite(out_path + '.gif', fake_rendered.data.cpu().numpy().transpose(0, 2, 3, 1), duration=0.025)
+        torchvision.utils.save_image(fake_rendered.data, out_path + '.png', nrow=10, normalize=True, scale_each=True)
+
+
     def save_networks(self, epoch):
         """Save networks to hard disk."""
         torch.save(self.netG.state_dict(),
@@ -1146,8 +1112,6 @@ class GAN(object):
                    '%s/netD_epoch_%d.pth' % (self.opt.out_dir, epoch))
         torch.save(self.netE.state_dict(),
                    '%s/netE_epoch_%d.pth' % (self.opt.out_dir, epoch))
-        torch.save(self.netD2.state_dict(),
-                   '%s/netD2_epoch_%d.pth' % (self.opt.out_dir, epoch))
 
     def save_images(self, epoch, input, output):
         """Save images."""
@@ -1173,7 +1137,7 @@ def main():
     # Create experiment output folder
     exp_dir = os.path.join(opt.out_dir, opt.name)
     mkdirs(exp_dir)
-    sub_dirs=['vis_images','vis_xyz','vis_monitoring']
+    sub_dirs=['vis_images','vis_xyz','vis_monitoring', 'vis_videos']
     for sub_dir in sub_dirs:
         dir_path = os.path.join(exp_dir, sub_dir)
         if not os.path.exists(dir_path):

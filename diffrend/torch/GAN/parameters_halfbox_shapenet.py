@@ -43,6 +43,9 @@ class Parameters():
         elif username == 'voletivi' or username == 'user1':
             default_root = '/u/voletivi/datasets/diffrend/data/cube'
             default_out = './render_samples'
+        elif username == 'parentjl':
+            default_root = '/network/home/parentjl/pix2scene/data/cube'
+            default_out = '/network/home/parentjl/pix2scene/out'
         else:
             raise ValueError('Add the route for the dataset of your system')
 
@@ -171,6 +174,7 @@ class Parameters():
                                                                      'camera at a fixed distance.')
 
         # Rendering parameters
+        self.parser.add_argument('--no_renderer', action='store_true', help='Let the generator output an image directly')
         self.parser.add_argument('--splats_img_size', type=int, default=128, help='the height / width of the number of generator splats')
         self.parser.add_argument('--render_type', type=str, default='img', help='render the image or the depth map [img, depth]')
         self.parser.add_argument('--render_img_size', type=int, default=128, help='Width/height of the rendering image')
@@ -179,6 +183,7 @@ class Parameters():
         self.parser.add_argument('--same_view', action='store_true', help='data with view fixed') # before we add conditioning on cam pose, this is necessary
         self.parser.add_argument('--print_interval', type=int, default=10, help='Print loss interval.')
         self.parser.add_argument('--save_image_interval', type=int, default=100, help='Save image interval.')
+        self.parser.add_argument('--save_video_interval', type=int, default=1000, help='Save video interval.')
         self.parser.add_argument('--save_interval', type=int, default=5000, help='Save state interval.')
 
     def parse(self):
